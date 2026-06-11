@@ -1,0 +1,134 @@
+﻿{
+    "Agavendicksaft": {
+        "cal_d": 310,
+        "prot_d": 0.1
+    },
+    "Apfel": {
+        "cal_d": 52,
+        "prot_d": 0.3,
+        "size": 200
+    },
+    "Basmati-Reis": {
+        "cal_d": 352,
+        "prot_d": 8.4
+    },
+    "Beeren gemischt": {
+        "cal_d": 42,
+        "prot_d": 0.4
+    },
+    "Brokkoli": {
+        "cal_d": 43,
+        "prot_d": 4,
+        "size": 300
+    },
+    "Brot": {
+        "cal_d": 252,
+        "prot_d": 7,
+        "size": 55
+    },
+    "Chia-Samen": {
+        "cal_d": 486,
+        "prot_d": 17
+    },
+    "Gurke": {
+        "cal_d": 14,
+        "prot_d": 0.6
+    },
+    "Haferflocken": {
+        "cal_d": 372,
+        "prot_d": 13.5
+    },
+    "Honig": {
+        "cal_d": 331,
+        "prot_d": 0.5
+    },
+    "Hähnchenbrustfilet": {
+        "cal_d": 97,
+        "prot_d": 20,
+        "size": 400
+    },
+    "Isolat": {
+        "cal_d": 373,
+        "prot_d": 90,
+        "size": 25
+    },
+    "Joghurt": {
+        "cal_d": 58,
+        "prot_d": 5.8
+    },
+    "Kartoffeln": {
+        "cal_d": 69,
+        "prot_d": 2
+    },
+    "Kohlrabi": {
+        "cal_d": 28,
+        "prot_d": 1.7
+    },
+    "Kokosmilch": {
+        "cal_d": 189,
+        "prot_d": 2,
+        "size": 400
+    },
+    "Kokosmilch light": {
+        "cal_d": 14,
+        "prot_d": 0.1,
+        "size": 400
+    },
+    "Kokosraspeln": {
+        "cal_d": 639,
+        "prot_d": 7
+    },
+    "Körniger Frischkäse": {
+        "cal_d": 97,
+        "prot_d": 11,
+        "size": 150
+    },
+    "Lachs": {
+        "cal_d": 190,
+        "prot_d": 21,
+        "size": 150
+    },
+    "Linsen (rot)": {
+        "cal_d": 353,
+        "prot_d": 26
+    },
+    "Mandeln": {
+        "cal_d": 619,
+        "prot_d": 24
+    },
+    "Milch": {
+        "cal_d": 64,
+        "prot_d": 3.5
+    },
+    "Mozzarella": {
+        "cal_d": 263,
+        "prot_d": 21,
+        "size": 54
+    },
+    "Olivenöl": {
+        "cal_d": 830,
+        "prot_d": 0
+    },
+    "Paprika": {
+        "cal_d": 31,
+        "prot_d": 1
+    },
+    "Scharlotte": {
+        "cal_d": 25,
+        "prot_d": 1.5
+    },
+    "Skyr": {
+        "cal_d": 62,
+        "prot_d": 12,
+        "size": 500
+    },
+    "Thunfisch": {
+        "cal_d": 100,
+        "prot_d": 22.9,
+        "size": 130
+    },
+    "Zwiebel": {
+        "cal_d": 40,
+        "prot_d": 1.1
+    }
+}
