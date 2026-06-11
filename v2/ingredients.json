@@ -1,0 +1,202 @@
+﻿{
+    "apfel": {
+        "cal_d": 52,
+        "prot_d": 0.3,
+        "fat_d": 0.2,
+        "carbs_d": 14,
+        "price": 2.59,
+        "pack_size": 500
+    },
+    "basmati-reis": {
+        "cal_d": 352,
+        "prot_d": 8.4,
+        "fat_d": 0.3,
+        "carbs_d": 28,
+        "price": 2.99,
+        "pack_size": 500
+    },
+    "beerenmix mit kirsche": {
+        "cal_d": 58,
+        "prot_d": 1,
+        "fat_d": 0.4,
+        "carbs_d": 11.5,
+        "price": 3.49,
+        "pack_size": 750
+    },
+    "blumenkohl": {
+        "cal_d": 26,
+        "prot_d": 1.8,
+        "fat_d": 0.7,
+        "carbs_d": 2.1,
+        "price": 2.49,
+        "pack_size": 300
+    },
+    "brokkoli": {
+        "cal_d": 43,
+        "prot_d": 4,
+        "fat_d": 0.6,
+        "carbs_d": 11.2,
+        "price": 1.79,
+        "pack_size": 300
+    },
+    "butter": {
+        "cal_d": 743,
+        "prot_d": 0.7,
+        "fat_d": 82,
+        "carbs_d": 0.6,
+        "price": 2.79,
+        "pack_size": 250
+    },
+    "cashewkerne": {
+        "cal_d": 602,
+        "prot_d": 21,
+        "fat_d": 48.4,
+        "carbs_d": 18.8,
+        "price": 3.79,
+        "pack_size": 250
+    },
+    "chiasamen": {
+        "cal_d": 474,
+        "prot_d": 22,
+        "fat_d": 35.3,
+        "carbs_d": 1.3,
+        "price": 1.85,
+        "pack_size": 300
+    },
+    "datteln": {
+        "cal_d": 278,
+        "prot_d": 1.9,
+        "fat_d": 0.53,
+        "carbs_d": 65.1,
+        "price": 1.65,
+        "pack_size": 200
+    },
+    "erdnussbutter": {
+        "cal_d": 626,
+        "prot_d": 28,
+        "fat_d": 52,
+        "carbs_d": 7.1,
+        "price": 1.95,
+        "pack_size": 250
+    },
+    "granatapfelsaft": {
+        "cal_d": 61,
+        "prot_d": 0.3,
+        "fat_d": 0.5,
+        "carbs_d": 13,
+        "price": 8.95,
+        "pack_size": 700
+    },
+    "haferflocken": {
+        "cal_d": 372,
+        "prot_d": 13.5,
+        "fat_d": 7,
+        "carbs_d": 60,
+        "price": 0.69,
+        "pack_size": 500
+    },
+    "hanfsamen": {
+        "cal_d": 553,
+        "prot_d": 30,
+        "fat_d": 48.8,
+        "carbs_d": 8.7,
+        "price": 2.95,
+        "pack_size": 200
+    },
+    "honig": {
+        "cal_d": 331,
+        "prot_d": 0.5,
+        "fat_d": 0,
+        "carbs_d": 82,
+        "price": 2.79,
+        "pack_size": 500
+    },
+    "hähnchenbrust": {
+        "cal_d": 97,
+        "prot_d": 20,
+        "fat_d": 3.6,
+        "carbs_d": 0,
+        "price": 4.99,
+        "pack_size": 400
+    },
+    "kokosnussmilch": {
+        "cal_d": 212,
+        "prot_d": 1.9,
+        "fat_d": 21,
+        "carbs_d": 3.3,
+        "price": 1.99,
+        "pack_size": 400
+    },
+    "makadamianüsse": {
+        "cal_d": 718,
+        "prot_d": 7.9,
+        "fat_d": 75.8,
+        "carbs_d": 13.8,
+        "price": 26.9,
+        "pack_size": 1000
+    },
+    "mandeln": {
+        "cal_d": 619,
+        "prot_d": 24,
+        "fat_d": 50,
+        "carbs_d": 22,
+        "price": 1.99,
+        "pack_size": 150
+    },
+    "milch": {
+        "cal_d": 64,
+        "prot_d": 3.5,
+        "fat_d": 3.5,
+        "carbs_d": 5,
+        "price": 1.09,
+        "pack_size": 1000
+    },
+    "olivenöl": {
+        "cal_d": 830,
+        "prot_d": 0,
+        "fat_d": 100,
+        "carbs_d": 0,
+        "price": 6,
+        "pack_size": 750
+    },
+    "sahne": {
+        "cal_d": 293,
+        "prot_d": 2.5,
+        "fat_d": 30,
+        "carbs_d": 3.2,
+        "price": 1.19,
+        "pack_size": 200
+    },
+    "skyr": {
+        "cal_d": 62,
+        "prot_d": 12,
+        "fat_d": 0.2,
+        "carbs_d": 4,
+        "price": 1.49,
+        "pack_size": 500
+    },
+    "tomaten": {
+        "cal_d": 22,
+        "prot_d": 1.2,
+        "fat_d": 0.1,
+        "carbs_d": 3.4,
+        "price": 1.19,
+        "pack_size": 400
+    },
+    "walnüsse": {
+        "cal_d": 700,
+        "prot_d": 16.1,
+        "fat_d": 65.2,
+        "carbs_d": 13.7,
+        "price": 1.65,
+        "pack_size": 150
+    },
+    "zwiebel": {
+        "cal_d": 27,
+        "prot_d": 1.2,
+        "fat_d": 0.3,
+        "carbs_d": 6.7,
+        "price": 1.55,
+        "pack_size": 750
+    }
+}
