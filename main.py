@@ -1,490 +1,925 @@
 import dash
-from dash import dcc, html, Input, Output, State, ALL, ctx
+from dash import dcc, html, Input, Output, State, ALL, MATCH, ctx, dash_table
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
-import json
-import os
-# NEW: Imports for the optimization logic
-from scipy.optimize import minimize, LinearConstraint
-import numpy as np
-from functools import partial
+import pandas as pd
 
-# For a nice, modern look, we'll use a Bootstrap theme and icons
-# The CYBORG theme gives us a cool, dark "vibe code" aesthetic
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG, dbc.icons.FONT_AWESOME])
-
-# =============================================================================
-# Data Loading
-# =============================================================================
-INGREDIENTS_PATH = 'ingredients.json'
-try:
-    with open(INGREDIENTS_PATH, 'r', encoding='utf-8-sig') as f:
-        data = json.load(f)
-        ingredient_db = dict(sorted({key.lower(): value for key, value in data.items()}.items()))
-        # Re-save the file in a sorted, pretty-printed format
-        with open(INGREDIENTS_PATH, 'w', encoding='utf-8-sig') as f_write:
-            json.dump(ingredient_db, f_write, indent=4, ensure_ascii=False)
-except FileNotFoundError:
-    print(f"WARNING: '{INGREDIENTS_PATH}' not found. Creating an empty database.")
-    ingredient_db = {}
-except json.JSONDecodeError:
-    print(f"WARNING: Could not decode JSON from '{INGREDIENTS_PATH}'. Using an empty database.")
-    ingredient_db = {}
+from data_manager import DataManager
+from recipe_manager import RecipeManager
+from components.navigation import create_sidebar
+from components.cookbook import create_cookbook_layout
+from components.planner import create_planner_layout, create_recipe_tab_content
+from components.inputs import create_ingredient_row
+from components.optimizer import create_optimizer_layout
+from components.results import create_results_layout
+from components.ingredients_editor import create_ingredients_editor_layout
+from optimization import solve_global_plan
+import uuid
+# from components.layout import create_layout # Old single page layout
 
 # =============================================================================
-# V1 Optimization Logic (Integrated into the script)
+# App Initialization & Data Setup
 # =============================================================================
-def get_nutrients_constraint(type, ingredients, orig_recipe, nutrients, num_portions):
-    a = []
-    for ingredient in orig_recipe:
-        a.append(ingredients.get(ingredient, {}).get(f'{type}_d', 0) / 100.0)
-    a = np.array(a)
-    eps = nutrients[f'delta_{type}']
-    b = nutrients[type] * num_portions
-    return LinearConstraint(A=a, lb=b - eps, ub=b + eps)
 
-# MODIFIED: The solver now accepts weights for the distance function
-def solve_optimization(recipe_vector, constraints, weights):
-    result = minimize(
-        partial(distance, recipe=recipe_vector, weights=weights),
-        recipe_vector,
-        method='SLSQP',
-        constraints=constraints,
-        bounds=[(0, None) for _ in recipe_vector] # Ensure amounts are non-negative
-    )
-    if not result.success:
-        print(f'Optimization failed: {result.message}')
+data_manager = DataManager('ingredients.json')
+recipe_manager = RecipeManager('recipes.json')
+
+app = dash.Dash(__name__, external_stylesheets=[
+                dbc.themes.CYBORG, "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css"], suppress_callback_exceptions=True)
+
+# Helper for ingredients
+
+
+def get_ingredient_options():
+    ingredients = data_manager.get_all_ingredients()
+    return [{'label': name.title(), 'value': name} for name in sorted(ingredients.keys())]
+
+
+def get_colors(n):
+    import plotly.colors as colors
+    return colors.qualitative.Plotly * (n // len(colors.qualitative.Plotly) + 1)
+
+
+# =============================================================================
+# Main Layout (Shell)
+# =============================================================================
+sidebar = create_sidebar()
+content_style = {
+    "margin-left": "16rem",
+    "margin-right": "0rem",
+    "padding": "2rem 1rem",
+}
+
+app.layout = html.Div([
+    dcc.Location(id='url', refresh=False),
+    dcc.Store(id='selected-recipes-store', storage_type='session'),
+    dcc.Store(id='settings-store', storage_type='local'),
+    dcc.Store(id='optimization-results-store', storage_type='session'),
+    dcc.Store(id='cookbook-refresh-trigger', data=0),
+
+    sidebar,
+
+    html.Div(id='page-content', style={
+        "margin-left": "16rem",
+        "padding": "2rem",
+    })
+])
+
+# =============================================================================
+# Page Routing Callback
+# =============================================================================
+
+
+@app.callback(Output('page-content', 'children'),
+              Input('url', 'pathname'),
+              Input('cookbook-refresh-trigger', 'data'),
+              State('selected-recipes-store', 'data'),
+              State('settings-store', 'data'),
+              State('optimization-results-store', 'data'))
+def display_page(pathname, _, selected_ids, settings_data, optimization_results):
+    if pathname == '/planner':
+        return create_planner_layout()
+    elif pathname == '/optimizer':
+        return create_optimizer_layout(settings_data)
+    elif pathname == '/results':
+        return create_results_layout(optimization_results, recipe_manager, data_manager)
+    elif pathname == '/ingredients':
+        return create_ingredients_editor_layout(data_manager)
+    # Default to Cookbook
+    return create_cookbook_layout(recipe_manager, selected_ids)
+
+
+@app.callback(
+    Output('settings-store', 'data'),
+    Input('target-protein', 'value'),
+    Input('target-calories', 'value'),
+    Input('tolerance-protein', 'value'),
+    Input('tolerance-calories', 'value'),
+    Input('min-meal-cal', 'value'),
+    Input('max-meal-cal', 'value'),
+    Input('include-cost-toggle', 'value'),
+    Input('slider-carbs', 'value'),
+    Input('slider-fat', 'value'),
+    prevent_initial_call=True
+)
+def save_settings(prot, cal, tol_prot, tol_cal, min_cal, max_cal, include_cost, carbs_val, fat_val):
+    return {
+        'prot': prot,
+        'cal': cal,
+        'tol_prot': tol_prot,
+        'tol_cal': tol_cal,
+        'min_meal_cal': min_cal,
+        'max_meal_cal': max_cal,
+        'include_cost': include_cost,
+        'macro_slider': {'carbs': carbs_val, 'fat': fat_val}
+    }
+
+
+@app.callback(
+    Output('slider-carbs', 'value'),
+    Output('slider-fat', 'value'),
+    Output('macro-distribution-bar', 'children'),
+    Input('slider-carbs', 'value'),
+    Input('slider-fat', 'value'),
+    Input('target-protein', 'value'),
+    Input('target-calories', 'value')
+)
+def sync_sliders_and_graph(carbs_slider, fat_slider, prot_target, cal_target):
+    """
+    Sliders represent relative split of Carbs/Fat (out of 100%).
+    They are inverses: if Carbs slider = 60, Fat slider = 40.
+
+    Actual distribution:
+    - Protein% = fixed from target inputs
+    - remaining% = 100 - Protein%
+    - Carbs% = carbs_slider / 100 * remaining%
+    - Fat% = fat_slider / 100 * remaining%
+    """
+    # 1. Calculate Protein %
+    if not cal_target or float(cal_target) <= 0:
+        prot_pct = 0
+    else:
+        try:
+            prot_cal = float(prot_target) * 4
+            cal_target_val = float(cal_target)
+            prot_pct = (prot_cal / cal_target_val) * 100
+        except (TypeError, ValueError):
+            prot_pct = 0
+
+    # Cap Protein at 100
+    if prot_pct > 100:
+        prot_pct = 100
+
+    remaining_pct = max(0, 100 - prot_pct)
+
+    # 2. Handle slider sync (inverses of each other)
+    trigger_id = ctx.triggered_id
+
+    # Default values
+    if carbs_slider is None:
+        carbs_slider = 50
+    if fat_slider is None:
+        fat_slider = 50
+
+    if trigger_id == 'slider-fat':
+        # Fat slider changed -> Carbs is inverse
+        carbs_slider = 100 - fat_slider
+    else:
+        # Carbs slider changed (or initial/protein change) -> Fat is inverse
+        fat_slider = 100 - carbs_slider
+
+    # 3. Calculate actual distribution percentages
+    actual_carbs_pct = (carbs_slider / 100) * remaining_pct
+    actual_fat_pct = (fat_slider / 100) * remaining_pct
+
+    # 4. Create Visual Bar with white labels
+    # Using html.Div to create custom colored segments since dbc.Progress color prop only accepts Bootstrap names
+    def make_bar(val, bg_color, label_text):
+        if val <= 0:
+            return None
+        return html.Div(
+            label_text if val > 8 else "",  # Only show label if segment is wide enough
+            style={
+                "width": f"{val}%",
+                "backgroundColor": bg_color,
+                "height": "100%",
+                "display": "inline-block",
+                "textAlign": "center",
+                "lineHeight": "30px",
+                "fontSize": "0.85rem",
+                "fontWeight": "bold",
+                "color": "white"
+            }
+        )
+
+    bar_children = [
+        make_bar(prot_pct, "#00cc96", f"{prot_pct:.0f}%"),
+        make_bar(actual_carbs_pct, "#AB63FA", f"{actual_carbs_pct:.0f}%"),
+        make_bar(actual_fat_pct, "#FFA15A", f"{actual_fat_pct:.0f}%")
+    ]
+    # Filter out None values
+    bar_children = [b for b in bar_children if b is not None]
+
+    return carbs_slider, fat_slider, bar_children
+
+
+# =============================================================================
+# Target Range Charts (Calories & Protein)
+# =============================================================================
+
+@app.callback(
+    Output('calories-chart-container', 'children'),
+    Input('target-calories', 'value'),
+    Input('tolerance-calories', 'value'),
+    Input('optimization-results-store', 'data')
+)
+def update_calories_chart(target_cal, tol_cal, results_data):
+    """Generate calories range chart with optional solution line."""
+    if not target_cal or not tol_cal:
         return None
-    return result.x
 
-# MODIFIED: The distance function now calculates a weighted distance
-def distance(x, recipe, weights):
-    # Handle zero-norm case for recipe vector
-    norm_recipe = np.linalg.norm(recipe)
-    if norm_recipe == 0:
-        return np.linalg.norm(np.sqrt(weights) * x)
-        
-    direction_norm = recipe / norm_recipe
-    projection = np.dot(x, direction_norm) * direction_norm
-    # Apply weights to the distance calculation
-    weighted_distance = np.linalg.norm(np.sqrt(weights) * (x - projection))
-    return weighted_distance
+    target_cal = float(target_cal)
+    tol_cal = float(tol_cal)
 
-def get_mass_constraint(constr_ingredient, orig_recipe, amount):
-    a = []
-    for ingredient in orig_recipe:
-        a.append(1 if ingredient == constr_ingredient else 0)
-    a = np.array(a)
-    return LinearConstraint(A=a, lb=amount, ub=amount)
+    # Get solution if available
+    sol_cal = None
+    if results_data and 'stats' in results_data:
+        sol_cal = results_data['stats'].get('calories')
 
-# =============================================================================
-# UI Helper Functions
-# =============================================================================
-def create_ingredient_row(index):
-    """Creates a Dash Bootstrap component row for a single ingredient."""
-    return dbc.Row(
-        [
-            dbc.Col(dbc.Button(html.I(className="fa fa-times"), id={'type': 'remove-ingredient', 'index': index}, color="danger", outline=True, size="sm"), width=1, className="d-flex align-items-center justify-content-center px-1"),
-            dbc.Col(dbc.Input(placeholder="g", type="number", id={'type': 'ingredient-amount', 'index': index}), width=2, className="px-1"),
-            dbc.Col(dbc.Input(placeholder="Name", type="text", id={'type': 'ingredient-name', 'index': index}), width=4, className="px-1"),
-            dbc.Col(dbc.Input(placeholder="Prio", type="number", id={'type': 'ingredient-priority', 'index': index}, value=1, min=0), width=1, className="px-1"),
-            dbc.Col(dbc.Button(html.I(className="fa fa-lock"), id={'type': 'ingredient-lock', 'index': index}, color="secondary", outline=True, size="sm"), width=1, className="d-flex align-items-center justify-content-center px-1"),
-            dbc.Col(dbc.Button(html.I(className="fa fa-cubes"), id={'type': 'package-lock', 'index': index}, color="secondary", outline=True, size="sm"), width=1, className="d-flex align-items-center justify-content-center px-1"),
-            dbc.Col(dbc.Input(type="number", id={'type': 'optimized-value', 'index': index}, disabled=True), width=2, className="px-1"),
-        ],
-        align="center",
-        className="mb-2 g-0",
-        id={'type': 'ingredient-row', 'index': index}
-    )
+    # X-axis range: target range should be 90% of graph width
+    range_start = target_cal - tol_cal
+    range_end = target_cal + tol_cal
+    range_width = range_end - range_start
 
-def create_ingredient_header():
-    """Creates a descriptive header for the ingredient input columns."""
-    return dbc.Row(
-        [
-            dbc.Col(width=1, className="px-1"),
-            dbc.Col(html.Label("Amount"), width=2, className="px-1"),
-            dbc.Col(html.Label("Ingredient"), width=4, className="px-1"),
-            dbc.Col(html.Label("Priority"), width=1, className="px-1"),
-            dbc.Col(html.Label("Lock"), width=1, className="text-center px-1"),
-            dbc.Col(html.Label("Pkg"), width=1, className="text-center px-1"),
-            dbc.Col(html.Label("Optimized g"), width=2, className="text-end px-1"),
-        ],
-        align="center",
-        className="mb-2 text-muted small g-0"
-    )
+    # Add 5% padding on each side so range spans 90% of graph
+    padding = range_width * (0.05 / 0.9)
+    min_x = range_start - padding
+    max_x = range_end + padding
 
-# =============================================================================
-# App Layout
-# =============================================================================
-app.layout = dbc.Container(
-    [
-        dcc.Store(id='optimized-recipe-data-store'),
-        dbc.Row(
-            [
-                # == Left Column (formerly Right): Goals and Graph ==
-                dbc.Col(
-                    [
-                        html.H4("Recipe Studio 🧪", className="mb-4"),
-                        dbc.Row([
-                            dbc.Col(html.Label("Number of Portions"), width=5),
-                            dbc.Col(dbc.Input(id="portions-input", type="number", value=1, min=1)),
-                        ], align="center", className="mb-3"),
-                        # MODIFIED: Added a column for the +/- sign
-                        dbc.Row([
-                            dbc.Col(html.Label("Protein Goal (g)"), width=5),
-                            dbc.Col(dbc.Input(id="protein-goal-input", type="number", placeholder="e.g., 30"), width=3),
-                            dbc.Col(html.Span("±"), width="auto", className="d-flex align-items-center justify-content-center"),
-                            dbc.Col(dbc.Input(id="protein-slack-input", type="number", placeholder="5"), width=3),
-                        ], align="center", className="mb-3"),
-                        # MODIFIED: Added a column for the +/- sign
-                        dbc.Row([
-                            dbc.Col(html.Label("Caloric Goal (kcal)"), width=5),
-                            dbc.Col(dbc.Input(id="caloric-goal-input", type="number", placeholder="e.g., 500"), width=3),
-                            dbc.Col(html.Span("±"), width="auto", className="d-flex align-items-center justify-content-center"),
-                            dbc.Col(dbc.Input(id="caloric-slack-input", type="number", placeholder="50"), width=3),
-                        ], align="center", className="mb-4"),
-                        html.Div(dcc.Graph(id="nutrition-graph", style={'height': '100%'}) , style={'flexGrow': 1, 'minHeight': 0}),
-                    ],
-                    md=4,
-                    className="p-4",
-                    style={'height': '100%', 'display': 'flex', 'flexDirection': 'column', 'overflow': 'hidden'}
-                ),
-                # == Right Column (formerly Left): Ingredients ==
-                dbc.Col(
-                    [
-                        dbc.Row([
-                            dbc.Col(dbc.Button("Add New Ingredient", id="add-ingredient-btn", color="primary", className="w-100")),
-                            dbc.Col(dbc.Button("Optimize Recipe", id="optimize-btn", color="success", className="w-100")),
-                        ], className="mb-3"),
-                        create_ingredient_header(),
-                        html.Hr(className="mt-0"),
-                        html.Div(
-                            id="ingredient-list-container",
-                            children=[],
-                            className="scrollable-ingredients",
-                            style={'overflowY': 'auto', 'flexGrow': 1}
-                        ),
-                        html.Div([
-                            html.Hr(),
-                            dbc.Row([
-                                dbc.Col(html.Div([html.Span("Kcal ", style={'color': '#ff7f50'}), html.I(className="fa fa-fire me-2", style={'color': '#ff7f50'}), html.Span(id='total-kcal', children="0.0")]), className="text-center"),
-                                dbc.Col(html.Div([html.Span("Protein ", style={'color': '#8B4513'}), html.I(className="fa fa-drumstick-bite me-2", style={'color': '#8B4513'}), html.Span(id='total-protein', children="0.0"), " g"]), className="text-center"),
-                                dbc.Col(html.Div([html.Span("Fat ", style={'color': '#ffd700'}), html.I(className="fa fa-tint me-2", style={'color': '#ffd700'}), html.Span(id='total-fat', children="0.0"), " g"]), className="text-center"),
-                                dbc.Col(html.Div([html.Span("Carbs ", style={'color': '#deb887'}), html.I(className="fa fa-bread-slice me-2", style={'color': '#deb887'}), html.Span(id='total-carbs', children="0.0"), " g"]), className="text-center"),
-                                dbc.Col(html.Div([html.Span("Cost ", style={'color': '#90ee90'}), html.I(className="fa fa-euro-sign me-2", style={'color': '#90ee90'}), html.Span(id='total-cost', children="0.00")]), className="text-center"),
-                            ])
-                        ])
-                    ],
-                    md=8,
-                    className="p-4",
-                    style={'height': '100%', 'display': 'flex', 'flexDirection': 'column', 'overflow': 'hidden'}
-                ),
-            ],
-            className="p-3",
-            style={'flexGrow': 1, 'overflow': 'hidden'}
-        ),
-    ],
-    fluid=True,
-    style={'height': '100vh', 'display': 'flex', 'flexDirection': 'column'}
-)
+    # Extend if solution is outside range
+    if sol_cal:
+        if sol_cal < min_x:
+            min_x = sol_cal - padding
+        if sol_cal > max_x:
+            max_x = sol_cal + padding
 
-
-# =============================================================================
-# Callbacks
-# =============================================================================
-
-## Callback 1: Add or remove ingredient rows
-@app.callback(
-    Output('ingredient-list-container', 'children'),
-    Input('add-ingredient-btn', 'n_clicks'),
-    Input({'type': 'remove-ingredient', 'index': ALL}, 'n_clicks'),
-    State('ingredient-list-container', 'children'),
-    prevent_initial_call=True
-)
-def update_ingredient_list(add_clicks, remove_clicks, current_rows):
-    triggered_id = ctx.triggered_id
-    if triggered_id == 'add-ingredient-btn':
-        new_row_index = add_clicks if add_clicks is not None else 0
-        new_row = create_ingredient_row(new_row_index)
-        current_rows.append(new_row)
-        return current_rows
-    if isinstance(triggered_id, dict) and triggered_id.get('type') == 'remove-ingredient':
-        index_to_remove = triggered_id['index']
-        updated_rows = [row for row in current_rows if row.get('props', {}).get('id', {}).get('index') != index_to_remove]
-        return updated_rows
-    return current_rows
-
-## Callback 2: Toggle ingredient lock buttons
-@app.callback(
-    Output({'type': 'ingredient-lock', 'index': ALL}, 'color'),
-    Output({'type': 'ingredient-lock', 'index': ALL}, 'outline'),
-    Input({'type': 'ingredient-lock', 'index': ALL}, 'n_clicks'),
-    State({'type': 'ingredient-lock', 'index': ALL}, 'id'),
-    State({'type': 'ingredient-lock', 'index': ALL}, 'color'),
-    prevent_initial_call=True
-)
-def toggle_ingredient_locks(ing_clicks, ing_ids, ing_colors):
-    triggered_id = ctx.triggered_id
-    output = {id['index']: (color, color=="secondary") for id, color in zip(ing_ids, ing_colors)}
-    def toggle(color): return ("primary", False) if color == "secondary" else ("secondary", True)
-    if isinstance(triggered_id, dict) and triggered_id.get('type') == 'ingredient-lock':
-        index = triggered_id['index']
-        output[index] = toggle(output[index][0])
-    ing_colors_out = [output[id['index']][0] for id in ing_ids]
-    ing_outlines_out = [output[id['index']][1] for id in ing_ids]
-    return ing_colors_out, ing_outlines_out
-
-## Callback 3: Toggle package lock buttons
-@app.callback(
-    Output({'type': 'package-lock', 'index': ALL}, 'color'),
-    Output({'type': 'package-lock', 'index': ALL}, 'outline'),
-    Input({'type': 'package-lock', 'index': ALL}, 'n_clicks'),
-    State({'type': 'package-lock', 'index': ALL}, 'id'),
-    State({'type': 'package-lock', 'index': ALL}, 'color'),
-    prevent_initial_call=True
-)
-def toggle_package_locks(pkg_clicks, pkg_ids, pkg_colors):
-    triggered_id = ctx.triggered_id
-    output = {id['index']: (color, color=="secondary") for id, color in zip(pkg_ids, pkg_colors)}
-    def toggle(color): return ("primary", False) if color == "secondary" else ("secondary", True)
-    if isinstance(triggered_id, dict) and triggered_id.get('type') == 'package-lock':
-        index = triggered_id['index']
-        output[index] = toggle(output[index][0])
-    pkg_colors_out = [output[id['index']][0] for id in pkg_ids]
-    pkg_outlines_out = [output[id['index']][1] for id in pkg_ids]
-    return pkg_colors_out, pkg_outlines_out
-
-## Callback 4: Validate ingredient name and update style
-@app.callback(
-    Output({'type': 'ingredient-name', 'index': ALL}, 'className'),
-    Input({'type': 'ingredient-name', 'index': ALL}, 'value'),
-    prevent_initial_call=True
-)
-def validate_ingredient_names(names):
-    class_names = []
-    for name in names:
-        if not name:
-            class_names.append("")
-            continue
-        if name.lower() in ingredient_db:
-            class_names.append("is-valid")
-        else:
-            class_names.append("is-invalid")
-    return class_names
-
-## Callback 5: Update the graph
-@app.callback(
-    Output('nutrition-graph', 'figure'),
-    Input({'type': 'ingredient-amount', 'index': ALL}, 'value'),
-    Input({'type': 'ingredient-name', 'index': ALL}, 'value'),
-    Input('protein-goal-input', 'value'),
-    Input('caloric-goal-input', 'value'),
-    Input('portions-input', 'value'),
-    Input('protein-slack-input', 'value'),
-    Input('caloric-slack-input', 'value'),
-    Input('optimized-recipe-data-store', 'data'),
-)
-def update_graph(amounts, names, protein_goal, caloric_goal, portions, protein_slack, caloric_slack, optimized_data):
-    total_protein, total_calories = 0, 0
-    for amount, name in zip(amounts, names):
-        if name and name.lower() in ingredient_db:
-            try:
-                info = ingredient_db[name.lower()]
-                amount_f = float(amount or 0)
-                total_calories += (amount_f / 100.0) * info['cal_d']
-                total_protein += (amount_f / 100.0) * info['prot_d']
-            except (ValueError, TypeError):
-                continue
-
-    try:
-        num_portions = float(portions or 1)
-        if num_portions <= 0: num_portions = 1
-    except (ValueError, TypeError):
-        num_portions = 1
-    
-    protein_per_portion = total_protein / num_portions if num_portions > 0 else 0
-    calories_per_portion = total_calories / num_portions if num_portions > 0 else 0
-    
     fig = go.Figure()
-    p_goal_f, c_goal_f = float(protein_goal or 0), float(caloric_goal or 0)
-    p_slack_f, c_slack_f = float(protein_slack or 0), float(caloric_slack or 0)
-    
-    fig.add_trace(go.Scatter(x=[p_goal_f - p_slack_f, p_goal_f + p_slack_f, p_goal_f + p_slack_f, p_goal_f - p_slack_f, p_goal_f - p_slack_f], y=[c_goal_f - c_slack_f, c_goal_f - c_slack_f, c_goal_f + c_slack_f, c_goal_f + c_slack_f, c_goal_f - c_slack_f], fill="toself", fillcolor='rgba(255,215,0,0.2)', line=dict(color='rgba(255,255,255,0)'), hoverinfo="none", name='Goal Zone'))
-    fig.add_trace(go.Scatter(x=[protein_per_portion], y=[calories_per_portion], mode='markers', name='Current Recipe', marker=dict(color='cyan', size=15)))
-    
-    if optimized_data:
-        fig.add_trace(go.Scatter(
-            x=[optimized_data.get('protein')], 
-            y=[optimized_data.get('calories')], 
-            mode='markers', 
-            name='Optimized Recipe', 
-            marker=dict(color='#90ee90', size=15, symbol='star')
-        ))
+    fig.add_trace(go.Bar(x=[0], y=[""], orientation='h',
+                  marker_color='rgba(0,0,0,0)', showlegend=False))
 
-    max_x = max(p_goal_f + p_slack_f, protein_per_portion, optimized_data.get('protein', 0) if optimized_data else 0)
-    max_y = max(c_goal_f + c_slack_f, calories_per_portion, optimized_data.get('calories', 0) if optimized_data else 0)
-    
-    range_x_max = max(max_x, 50) * 1.2
-    range_y_max = max(max_y, 500) * 1.2
+    # Target Range
+    fig.add_shape(type="rect",
+                  x0=range_start, x1=range_end,
+                  y0=-0.4, y1=0.4,
+                  line=dict(width=0),
+                  fillcolor="rgba(239, 85, 59, 0.3)")
+
+    # Solution Line (if available)
+    if sol_cal:
+        fig.add_shape(type="line",
+                      x0=sol_cal, x1=sol_cal,
+                      y0=-0.4, y1=0.4,
+                      line=dict(color="#EF553B", width=5))
 
     fig.update_layout(
-        title=None,
-        xaxis_title="Protein (g)",
-        yaxis_title="Calories (kcal)",
-        template="plotly_dark",
-        xaxis=dict(range=[0, range_x_max]),
-        yaxis=dict(range=[0, range_y_max]),
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-        margin=dict(l=40, r=10, t=10, b=40)
+        xaxis=dict(range=[min_x, max_x], showgrid=False),
+        yaxis=dict(showticklabels=False),
+        margin=dict(l=0, r=10, t=5, b=25),
+        height=50,
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font={'color': "white"}
     )
-    
-    return fig
 
-## Callback 6: Function for optimization with priority weighting
+    return dcc.Graph(figure=fig, config={'displayModeBar': False}, style={"height": "50px", "width": "100%"})
+
+
 @app.callback(
-    Output({'type': 'optimized-value', 'index': ALL}, 'value'),
-    Output('optimized-recipe-data-store', 'data'),
-    Input('optimize-btn', 'n_clicks'),
-    State({'type': 'ingredient-amount', 'index': ALL}, 'value'),
-    State({'type': 'ingredient-name', 'index': ALL}, 'value'),
-    State({'type': 'ingredient-priority', 'index': ALL}, 'value'),
-    State('protein-goal-input', 'value'),
-    State('caloric-goal-input', 'value'),
-    State('protein-slack-input', 'value'),
-    State('caloric-slack-input', 'value'),
-    State('portions-input', 'value'),
-    State({'type': 'ingredient-lock', 'index': ALL}, 'color'),
-    State({'type': 'package-lock', 'index': ALL}, 'color'),
+    Output('protein-chart-container', 'children'),
+    Input('target-protein', 'value'),
+    Input('tolerance-protein', 'value'),
+    Input('optimization-results-store', 'data')
+)
+def update_protein_chart(target_prot, tol_prot, results_data):
+    """Generate protein range chart with optional solution line."""
+    if not target_prot or not tol_prot:
+        return None
+
+    target_prot = float(target_prot)
+    tol_prot = float(tol_prot)
+
+    # Get solution if available
+    sol_prot = None
+    if results_data and 'stats' in results_data:
+        sol_prot = results_data['stats'].get('protein')
+
+    # X-axis range: target range should be 90% of graph width
+    range_start = target_prot - tol_prot
+    range_end = target_prot + tol_prot
+    range_width = range_end - range_start
+
+    # Add 5% padding on each side so range spans 90% of graph
+    padding = range_width * (0.05 / 0.9)
+    min_x = range_start - padding
+    max_x = range_end + padding
+
+    # Extend if solution is outside range
+    if sol_prot:
+        if sol_prot < min_x:
+            min_x = sol_prot - padding
+        if sol_prot > max_x:
+            max_x = sol_prot + padding
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=[0], y=[""], orientation='h',
+                  marker_color='rgba(0,0,0,0)', showlegend=False))
+
+    # Target Range
+    fig.add_shape(type="rect",
+                  x0=range_start, x1=range_end,
+                  y0=-0.4, y1=0.4,
+                  line=dict(width=0),
+                  fillcolor="rgba(0, 204, 150, 0.3)")
+
+    # Solution Line (if available)
+    if sol_prot:
+        fig.add_shape(type="line",
+                      x0=sol_prot, x1=sol_prot,
+                      y0=-0.4, y1=0.4,
+                      line=dict(color="#00cc96", width=5))
+
+    fig.update_layout(
+        xaxis=dict(range=[min_x, max_x], showgrid=False),
+        yaxis=dict(showticklabels=False),
+        margin=dict(l=0, r=10, t=5, b=25),
+        height=50,
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font={'color': "white"}
+    )
+
+    return dcc.Graph(figure=fig, config={'displayModeBar': False}, style={"height": "50px", "width": "100%"})
+
+
+# =============================================================================
+# Ingredients Editor Logic
+# =============================================================================
+
+
+@app.callback(
+    Output('ingredients-table', 'data'),
+    Input('add-ingredient-btn', 'n_clicks'),
+    State('ingredients-table', 'data'),
     prevent_initial_call=True
 )
-def optimize_recipe(n_clicks, amounts, names, priorities, protein_goal, caloric_goal, protein_slack, caloric_slack, portions, ing_lock_colors, pkg_lock_colors):
-    # 1. Assemble data from the UI
-    valid_indices = [i for i, name in enumerate(names) if name and name.lower() in ingredient_db]
-    if not valid_indices:
-        return ["" for _ in names], None
+def add_ingredient_row(n_clicks, rows):
+    if not n_clicks:
+        return dash.no_update
+    if rows is None:
+        rows = []
+    # Add empty row with default values
+    rows.insert(0, {
+        'name': 'New Ingredient',
+        'cal_d': 0, 'prot_d': 0, 'carbs_d': 0, 'fat_d': 0, 'price': 0, 'pack_size': 0
+    })
+    return rows
 
-    orig_recipe = {names[i].lower(): float(amounts[i] or 0) for i in valid_indices}
-    weights_dict = {names[i].lower(): float(priorities[i] or 1) for i in valid_indices}
-    
-    nutrients = {
-        'cal': float(caloric_goal or 0),
-        'prot': float(protein_goal or 0),
-        'delta_cal': float(caloric_slack or 0),
-        'delta_prot': float(protein_slack or 0)
+
+@app.callback(
+    Output('ingredients-status-msg', 'children'),
+    Input('save-ingredients-btn', 'n_clicks'),
+    State('ingredients-table', 'data'),
+    prevent_initial_call=True
+)
+def save_ingredients_changes(n_clicks, rows):
+    if not n_clicks or not rows:
+        return dash.no_update
+
+    data_manager.update_database(rows)
+    return "✅ Saved successfully!"
+
+
+# =============================================================================
+# Cookbook Actions (Add / Delete / Rename)
+# =============================================================================
+
+# 1. Open/Close ADd Modal
+@app.callback(
+    Output("add-recipe-modal", "is_open"),
+    Input("add-recipe-btn", "n_clicks"),
+    Input("add-recipe-confirm", "n_clicks"),
+    Input("add-recipe-cancel", "n_clicks"),
+    State("add-recipe-modal", "is_open"),
+    prevent_initial_call=True
+)
+def toggle_add_modal(n1, n2, n3, is_open):
+    if n1 or n2 or n3:
+        return not is_open
+    return is_open
+
+# 2. Add Recipe Confirmation -> Refresh Page
+
+
+@app.callback(
+    # Trigger page reload by forcing simple refresh? Or just set pathname to same?
+    Output('cookbook-refresh-trigger', 'data'),
+    Input('add-recipe-confirm', 'n_clicks'),
+    Input('rename-recipe-confirm', 'n_clicks'),
+    Input({'type': 'delete-recipe-btn', 'index': ALL}, 'n_clicks'),
+    State('new-recipe-name', 'value'),
+    State('rename-recipe-input', 'value'),
+    State('rename-recipe-id-store', 'data'),
+    # Get current value to increment
+    State('cookbook-refresh-trigger', 'data'),
+    prevent_initial_call=True
+)
+def handle_cookbook_actions(add_clicks, rename_clicks, delete_clicks, new_name, rename_name, rename_id, current_refresh_data):
+    if current_refresh_data is None:
+        current_refresh_data = 0
+
+    triggered_id = ctx.triggered_id
+    if not triggered_id:
+        return dash.no_update
+
+    # ADD RECIPE
+    if triggered_id == 'add-recipe-confirm':
+        if not new_name:
+            return dash.no_update
+
+        # Create ID
+        r_id = str(uuid.uuid4())[:8]
+        new_recipe = {
+            "name": new_name,
+            "ingredients": [],
+            "portions": 1
+        }
+        recipe_manager.add_recipe(r_id, new_recipe)
+        return current_refresh_data + 1
+
+    # RENAME RECIPE
+    if triggered_id == 'rename-recipe-confirm':
+        if rename_id and rename_name:
+            r = recipe_manager.get_recipe(rename_id)
+            if r:
+                r['name'] = rename_name
+                recipe_manager.add_recipe(rename_id, r)
+                return current_refresh_data + 1
+
+    # DELETE RECIPE
+    # Check if delete button was clicked
+    # triggered_id is a dict for pattern matched callbacks
+    if isinstance(triggered_id, dict) and triggered_id.get('type') == 'delete-recipe-btn':
+        # Check that value is not None (initial load)
+        # We find the value in ctx.triggered for this specific ID
+        # Dash sometimes minimizes spaces in prop_id, but safer to loop
+        ids_prop_id = str(triggered_id).replace(" ", "")
+
+        is_valid_click = False
+        for t in ctx.triggered:
+            # t['value'] is the n_clicks
+            if t['value'] is not None and t['value'] > 0:
+                is_valid_click = True
+                break
+
+        if not is_valid_click:
+            return dash.no_update
+
+        r_id = triggered_id.get('index')
+        recipe_manager.delete_recipe(r_id)
+        return current_refresh_data + 1
+
+    return dash.no_update
+
+# 3. Open Rename Modal
+
+
+@app.callback(
+    Output("rename-recipe-modal", "is_open"),
+    Output("rename-recipe-input", "value"),
+    Output("rename-recipe-id-store", "data"),
+    Input({'type': 'rename-recipe-btn', 'index': ALL}, 'n_clicks'),
+    Input("rename-recipe-confirm", "n_clicks"),
+    Input("rename-recipe-cancel", "n_clicks"),
+    State("rename-recipe-modal", "is_open"),
+    prevent_initial_call=True
+)
+def toggle_rename_modal(edit_clicks, save_clicks, cancel_clicks, is_open):
+    triggered_id = ctx.triggered_id
+    if not triggered_id:
+        return dash.no_update
+
+    # Reset/Close
+    # triggered_id is string here
+    if triggered_id == 'rename-recipe-confirm' or triggered_id == 'rename-recipe-cancel':
+        return False, dash.no_update, dash.no_update
+
+    # Open
+    # triggered_id is dict here
+    if isinstance(triggered_id, dict) and triggered_id.get('type') == 'rename-recipe-btn':
+        r_id = triggered_id.get('index')
+        r = recipe_manager.get_recipe(r_id)
+        if r:
+            return True, r.get('name', ''), r_id
+
+    return dash.no_update
+
+# Stores optimization results in memory (client-side store) so both pages can access
+# We need a new store for this? Or just push to layout?
+# The request asks to "display individual recipes in results page".
+# Since optimization happens on the Optimizer page, we need to Store the results
+# so the user can navigate to Results page and see them.
+
+
+@app.callback(
+    Output("macro-result-bar", "children"),
+    Output("optimization-results-store", "data"),
+    Output("optimization-status-output", "children"),
+    Input("run-optimization-btn", "n_clicks"),
+    State("settings-store", "data"),
+    State("selected-recipes-store", "data"),
+    prevent_initial_call=True
+)
+def run_global_optimization(n_clicks, settings_data, selected_ids):
+    if not n_clicks:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    if not selected_ids:
+        return dash.no_update, dash.no_update, dbc.Alert("No recipes selected! Go to Cookbook.", color="warning")
+
+    # 1. Load Data
+    active_recipes = []
+    for r_id in selected_ids:
+        r = recipe_manager.get_recipe(r_id)
+        if r:
+            # Inject ID for internal use without modifying persistent store
+            r_with_id = r.copy()
+            r_with_id['id'] = r_id
+            active_recipes.append(r_with_id)
+
+    if not active_recipes:
+        return dash.no_update, dash.no_update, dbc.Alert("Selected recipes not found in DB.", color="danger")
+
+    ingredient_db = data_manager.get_all_ingredients()
+
+    # 2. Build Targets
+    settings_data = settings_data or {}
+    target_prot = settings_data.get('prot', 160)
+    target_cal = settings_data.get('cal', 2200)
+    tol_prot = settings_data.get('tol_prot', 5)
+    tol_cal = settings_data.get('tol_cal', 50)
+    min_meal_cal = settings_data.get('min_meal_cal', 300)
+    max_meal_cal = settings_data.get('max_meal_cal', 1000)
+
+    targets = {}
+
+    # Store per-meal constraints
+    targets['min_meal_cal'] = float(
+        min_meal_cal) if min_meal_cal is not None else 300.0
+    targets['max_meal_cal'] = float(
+        max_meal_cal) if max_meal_cal is not None else 1000.0
+    if target_cal:
+        targets['cal'] = float(target_cal)
+        targets['delta_cal'] = float(tol_cal or 50)
+    if target_prot:
+        targets['prot'] = float(target_prot)
+        targets['delta_prot'] = float(tol_prot or 5)
+
+    # 3. Run Solver
+    # updates is {r_id: {row_idx: amount}}
+    updates, stats = solve_global_plan(active_recipes, ingredient_db, targets)
+
+    if updates is None and stats and 'error' in stats:
+        return dash.no_update, dash.no_update, dbc.Alert(f"Optimization Failed: {stats['error']}", color="danger")
+
+    # 4. Process Results for Charts & Storage
+    recipe_breakdown = {}
+
+    # We calculate the stats again later for the detailed view, but we need aggregated stats here for the charts
+    # and we need to save the 'updates' to the store.
+
+    # Re-calculate breakdown for charts
+    old_recipes_map = {r['id']: r for r in active_recipes}
+
+    for r_id, row_map in updates.items():
+        old_r = old_recipes_map.get(r_id)
+        if not old_r:
+            continue
+
+        old_ingredients = old_r.get('ingredients', [])
+
+        for idx, new_amount in row_map.items():
+            if idx < len(old_ingredients):
+                ing_name = old_ingredients[idx].get('name')
+
+                ing_info = ingredient_db.get(ing_name, {})
+                c_d = ing_info.get('cal_d', 0)
+                p_d = ing_info.get('prot_d', 0)
+                portions = float(old_r.get('portions', 1))
+                if portions <= 0:
+                    portions = 1
+
+                c_contrib_new = (new_amount / 100.0 * c_d) / portions
+                p_contrib_new = (new_amount / 100.0 * p_d) / portions
+
+                if r_id not in recipe_breakdown:
+                    recipe_breakdown[r_id] = {
+                        'name': old_r.get('name', 'Unknown'),
+                        'cal': 0.0, 'prot': 0.0
+                    }
+                recipe_breakdown[r_id]['cal'] += c_contrib_new
+                recipe_breakdown[r_id]['prot'] += p_contrib_new
+
+    # Macros Distribution - HTML Div Bar (matching left side)
+    prot_cals = stats.get('protein', 0) * 4
+    carbs_cals = stats.get('carbs', 0) * 4
+    fat_cals = stats.get('fat', 0) * 9
+
+    # Calculate raw percentages
+    total_macro_cals = prot_cals + carbs_cals + fat_cals
+    if total_macro_cals > 0:
+        s_p_pct = (prot_cals / total_macro_cals) * 100
+        s_c_pct = (carbs_cals / total_macro_cals) * 100
+        s_f_pct = (fat_cals / total_macro_cals) * 100
+    else:
+        s_p_pct = s_c_pct = s_f_pct = 0
+
+    # Create HTML bar segments (like on left side)
+    def make_result_bar(val, bg_color, label_text):
+        if val <= 0:
+            return None
+        return html.Div(
+            label_text if val > 8 else "",
+            style={
+                "width": f"{val}%",
+                "backgroundColor": bg_color,
+                "height": "100%",
+                "display": "inline-block",
+                "textAlign": "center",
+                "lineHeight": "30px",
+                "fontSize": "0.85rem",
+                "fontWeight": "bold",
+                "color": "white"
+            }
+        )
+
+    macro_bar_children = [
+        make_result_bar(s_p_pct, "#00cc96", f"{s_p_pct:.0f}%"),
+        make_result_bar(s_c_pct, "#AB63FA", f"{s_c_pct:.0f}%"),
+        make_result_bar(s_f_pct, "#FFA15A", f"{s_f_pct:.0f}%")
+    ]
+    macro_bar_children = [b for b in macro_bar_children if b is not None]
+
+    # Package data for Store (include stats for chart updates)
+    results_payload = {
+        'updates': updates,
+        'selected_ids': selected_ids,
+        'stats': {
+            'calories': stats.get('calories'),
+            'protein': stats.get('protein'),
+            'carbs': stats.get('carbs'),
+            'fat': stats.get('fat')
+        }
     }
-    num_portions = float(portions or 1)
-    
-    # 2. Build constraints and weights vector
-    recipe_vector = np.asarray(list(orig_recipe.values()), dtype=float)
-    weights_vector = np.asarray(list(weights_dict.values()), dtype=float)
-    cal_constr = get_nutrients_constraint('cal', ingredient_db, orig_recipe, nutrients, num_portions)
-    prot_constr = get_nutrients_constraint('prot', ingredient_db, orig_recipe, nutrients, num_portions)
-    constraints = [cal_constr, prot_constr]
 
-    for i, (name, color) in enumerate(zip(names, ing_lock_colors)):
-        if color == "primary" and name.lower() in orig_recipe:
-            constraints.append(get_mass_constraint(name.lower(), orig_recipe, float(amounts[i] or 0)))
+    return macro_bar_children, results_payload, dbc.Alert("Optimization Calculated! (Now go to Results)", color="success", dismissable=True)
 
-    # 3. Solve the optimization
-    sol = solve_optimization(recipe_vector, constraints, weights_vector)
-    if sol is None:
-        return ["" for _ in names], None
 
-    # 4. Handle package size constraints
-    consider_size = [names[i].lower() for i in valid_indices if pkg_lock_colors[i] == "primary"]
-    if consider_size:
-        package_constraints = []
-        for index, ingredient in enumerate(orig_recipe):
-            if ingredient in consider_size:
-                size = ingredient_db[ingredient].get('pack_size', 1)
-                amount = round(sol[index] / size) * size
-                package_constraints.append(get_mass_constraint(ingredient, orig_recipe, amount))
-        
-        sol = solve_optimization(recipe_vector, constraints + package_constraints, weights_vector)
-        if sol is None:
-            return ["" for _ in names], None
+# =============================================================================
+# State Management: Cookbook <-> Selected Store
+# =============================================================================
 
-    # 5. Format and return the results
-    sol = np.round(sol)
-    optimized_values_dict = {name: val for name, val in zip(orig_recipe.keys(), sol)}
-    
-    final_optimized_values = [f"{optimized_values_dict.get(name.lower(), ''):.1f}" if name and name.lower() in optimized_values_dict else "" for name in names]
-
-    opt_total_kcal, opt_total_protein = 0, 0
-    for name, amount in optimized_values_dict.items():
-        info = ingredient_db[name]
-        opt_total_kcal += (amount / 100.0) * info['cal_d']
-        opt_total_protein += (amount / 100.0) * info['prot_d']
-    
-    opt_kcal_per_portion = opt_total_kcal / num_portions if num_portions > 0 else 0
-    opt_protein_per_portion = opt_total_protein / num_portions if num_portions > 0 else 0
-    
-    optimized_data = {'calories': opt_kcal_per_portion, 'protein': opt_protein_per_portion}
-
-    return final_optimized_values, optimized_data
-
-## Callback 7: Update the summary bar based on optimized values
+# 1. Update Store when Checkboxes Change
 @app.callback(
-    Output('total-kcal', 'children'),
-    Output('total-protein', 'children'),
-    Output('total-fat', 'children'),
-    Output('total-carbs', 'children'),
-    Output('total-cost', 'children'),
-    Input({'type': 'optimized-value', 'index': ALL}, 'value'),
-    State({'type': 'ingredient-name', 'index': ALL}, 'value'),
-    State('portions-input', 'value'),
-)
-def update_summary_bar(optimized_amounts, names, portions):
-    total_kcal, total_protein, total_fat, total_carbs, total_cost = 0, 0, 0, 0, 0
-
-    for amount, name in zip(optimized_amounts, names):
-        if name and name.lower() in ingredient_db:
-            try:
-                info = ingredient_db[name.lower()]
-                amount_f = float(amount or 0)
-                
-                total_kcal += (amount_f / 100.0) * info['cal_d']
-                total_protein += (amount_f / 100.0) * info['prot_d']
-                total_fat += (amount_f / 100.0) * info['fat_d']
-                total_carbs += (amount_f / 100.0) * info['carbs_d']
-                total_cost += (amount_f / info['pack_size']) * info['price']
-
-            except (ValueError, TypeError, KeyError):
-                continue
-    
-    try:
-        num_portions = float(portions or 1)
-        if num_portions <= 0: num_portions = 1
-    except (ValueError, TypeError):
-        num_portions = 1
-
-    kcal_per_portion = total_kcal / num_portions if num_portions > 0 else 0
-    protein_per_portion = total_protein / num_portions if num_portions > 0 else 0
-    fat_per_portion = total_fat / num_portions if num_portions > 0 else 0
-    carbs_per_portion = total_carbs / num_portions if num_portions > 0 else 0
-    cost_per_portion = total_cost / num_portions if num_portions > 0 else 0
-
-    return (
-        f"{kcal_per_portion:.0f}",
-        f"{protein_per_portion:.1f}",
-        f"{fat_per_portion:.1f}",
-        f"{carbs_per_portion:.1f}",
-        f"{cost_per_portion:.2f}"
-    )
-
-## Callback 8: Clear the optimized data when manual inputs change
-@app.callback(
-    Output('optimized-recipe-data-store', 'data', allow_duplicate=True),
-    Input({'type': 'ingredient-amount', 'index': ALL}, 'value'),
-    Input({'type': 'ingredient-name', 'index': ALL}, 'value'),
+    Output('selected-recipes-store', 'data'),
+    Input({'type': 'recipe-select', 'index': ALL}, 'value'),
+    State({'type': 'recipe-select', 'index': ALL}, 'id'),
+    State('selected-recipes-store', 'data'),
     prevent_initial_call=True
 )
-def clear_optimization_on_edit(amounts, names):
-    return None
+def update_selected_recipes(values, ids, current_data):
+    if current_data is None:
+        current_data = []
+
+    selected_set = set(current_data)
+
+    for val, comp_id in zip(values, ids):
+        r_id = comp_id['index']
+        if val:
+            selected_set.add(r_id)
+        elif r_id in selected_set:
+            selected_set.remove(r_id)
+
+    return list(selected_set)
+
+# 2. Hydration handled in display_page via direct layout generation
+# Old hydrate_checkboxes callback removed
 
 
 # =============================================================================
-# Run the App
+# Planner Logic: Store -> Tabs
 # =============================================================================
+@app.callback(
+    Output('planner-tabs-container', 'children'),
+    Input('url', 'pathname'),
+    State('selected-recipes-store', 'data')
+)
+def render_planner_tabs(pathname, selected_ids):
+    if pathname != '/planner' or not selected_ids:
+        if pathname == '/planner':
+            return html.Div("No recipes selected. Go to Cookbook to add some!", className="text-center mt-5 text-muted")
+        return dash.no_update
+
+    tabs = []
+    ign_opts = get_ingredient_options()
+
+    # Sort to keep tab order consistent
+    sorted_ids = sorted(selected_ids)
+
+    for r_id in sorted_ids:
+        recipe = recipe_manager.get_recipe(r_id)
+        if not recipe:
+            continue
+
+        tab_content = create_recipe_tab_content(r_id, recipe, ign_opts)
+
+        tabs.append(dbc.Tab(
+            tab_content,
+            label=recipe.get('name', 'Recipe'),
+            tab_id=r_id,
+            label_style={"color": "#fff"}
+        ))
+
+    return dbc.Tabs(tabs)
+
+
+# =============================================================================
+# Planner Interactivity (Add/Remove Ingredients)
+# =============================================================================
+
+
+@app.callback(
+    Output({'type': 'recipe-tab-rows', 'recipe_id': MATCH}, 'children'),
+    Input({'type': 'add-ing-btn', 'recipe_id': MATCH}, 'n_clicks'),
+    Input({'type': 'remove-ingredient',
+          'recipe_id': MATCH, 'row_id': ALL}, 'n_clicks'),
+    State({'type': 'recipe-tab-rows', 'recipe_id': MATCH}, 'children'),
+    prevent_initial_call=True
+)
+def update_recipe_tab_ingredients(add_click, remove_clicks, current_children):
+    """
+    Manages ingredients for a SINGLE recipe tab.
+    Uses MATCH to isolate logic per recipe.
+    Persists Add/Remove actions to disk immediately.
+    """
+    triggered = ctx.triggered_id
+    if not triggered:
+        return dash.no_update
+
+    if current_children is None:
+        current_children = []
+
+    recipe_id = triggered.get('recipe_id')
+
+    # Load current recipe data from disk to ensure sync
+    current_recipe = recipe_manager.get_recipe(recipe_id)
+    if not current_recipe:
+        # Should not happen ideally
+        return dash.no_update
+
+    current_ingredients = current_recipe.get('ingredients', [])
+
+    if isinstance(triggered, dict) and triggered.get('type') == 'add-ing-btn':
+        # Add a new row
+        import uuid
+        row_id = str(uuid.uuid4())[:8]  # Unique ID for the new row
+
+        ign_opts = get_ingredient_options()
+        new_row = create_ingredient_row(
+            recipe_id, row_id, ign_opts, is_planner=True)
+
+        # Add empty ingredient to DB
+        new_ing_data = {
+            "name": "",
+            "amount": None,
+            "priority": 1,
+            "locked": False,
+            "pkg_locked": False
+        }
+        current_ingredients.append(new_ing_data)
+        current_recipe['ingredients'] = current_ingredients
+        recipe_manager.add_recipe(recipe_id, current_recipe)
+
+        return current_children + [new_row]
+
+    elif isinstance(triggered, dict) and triggered.get('type') == 'remove-ingredient':
+        target_row_id = triggered.get('row_id')
+
+        new_children = []
+        removed_index = -1
+
+        for i, row in enumerate(current_children):
+            try:
+                row_props_id = row['props']['id']
+                if row_props_id.get('row_id') == target_row_id:
+                    removed_index = i
+                    continue  # Skip adding this row to new_children
+                new_children.append(row)
+            except Exception:
+                new_children.append(row)
+
+        # Remove from DB if found
+        if removed_index != -1 and removed_index < len(current_ingredients):
+            current_ingredients.pop(removed_index)
+            current_recipe['ingredients'] = current_ingredients
+            recipe_manager.add_recipe(recipe_id, current_recipe)
+
+        return new_children
+
+    return dash.no_update
+
+
+@app.callback(
+    Output({'type': 'save-status', 'recipe_id': MATCH}, 'children'),
+    Input({'type': 'ingredient-amount', 'recipe_id': MATCH, 'row_id': ALL}, 'value'),
+    Input({'type': 'ingredient-name', 'recipe_id': MATCH, 'row_id': ALL}, 'value'),
+    Input({'type': 'ingredient-priority',
+          'recipe_id': MATCH, 'row_id': ALL}, 'value'),
+    Input({'type': 'ingredient-lock', 'recipe_id': MATCH, 'row_id': ALL}, 'color'),
+    Input({'type': 'package-lock', 'recipe_id': MATCH, 'row_id': ALL}, 'color'),
+    Input({'type': 'recipe-portions', 'recipe_id': MATCH}, 'value'),
+    prevent_initial_call=True
+)
+def save_recipe_changes(amounts, names, priorities, lock_colors, pkg_lock_colors, portions):
+    """
+    Auto-saves INDIVIDUAL INGREDIENT edits and PORTIONS to disk.
+    Triggered whenever any ingredient input or portions input in the recipe tab changes.
+    """
+    triggered = ctx.triggered_id
+    if not triggered:
+        return dash.no_update
+
+    recipe_id = triggered.get('recipe_id')
+    current_recipe = recipe_manager.get_recipe(recipe_id)
+
+    if not current_recipe:
+        return dash.no_update
+
+    # Check if portions triggered the callback
+    if triggered.get('type') == 'recipe-portions':
+        if portions is None or portions == "":
+            return dash.no_update
+
+        try:
+            new_portions = float(portions)
+        except ValueError:
+            new_portions = 1.0
+
+        current_recipe['portions'] = new_portions
+        recipe_manager.add_recipe(recipe_id, current_recipe)
+        return f"Saved Portions: {new_portions}"
+
+    # Ingredient update
+    # Reconstruct ingredients list
+    new_ingredients = []
+
+    for amt, name, prio, l_col, p_col in zip(amounts, names, priorities, lock_colors, pkg_lock_colors):
+        ing = {
+            "name": name if name else "",
+            "amount": amt if amt is not None else 0,
+            "priority": prio if prio is not None else 1,
+            "locked": (l_col == "primary"),
+            "pkg_locked": (p_col == "primary")
+        }
+        new_ingredients.append(ing)
+
+    current_recipe['ingredients'] = new_ingredients
+    recipe_manager.add_recipe(recipe_id, current_recipe)
+
+    return f"Last Saved: Items={len(new_ingredients)}"
+
+
+# =============================================================================
+# Lock Toggling Logic (Simplified with MATCH)
+# =============================================================================
+
+
+@app.callback(
+    Output({'type': 'ingredient-lock', 'recipe_id': MATCH, 'row_id': MATCH}, 'color'),
+    Output({'type': 'ingredient-lock', 'recipe_id': MATCH,
+           'row_id': MATCH}, 'outline'),
+    Input({'type': 'ingredient-lock', 'recipe_id': MATCH,
+          'row_id': MATCH}, 'n_clicks'),
+    State({'type': 'ingredient-lock', 'recipe_id': MATCH, 'row_id': MATCH}, 'color'),
+    prevent_initial_call=True
+)
+def toggle_ingredient_lock(n_clicks, current_color):
+    if not n_clicks:
+        return dash.no_update
+
+    if current_color == "secondary":
+        return "primary", False
+    return "secondary", True
+
+
+@app.callback(
+    Output({'type': 'package-lock', 'recipe_id': MATCH, 'row_id': MATCH}, 'color'),
+    Output({'type': 'package-lock', 'recipe_id': MATCH,
+           'row_id': MATCH}, 'outline'),
+    Input({'type': 'package-lock', 'recipe_id': MATCH, 'row_id': MATCH}, 'n_clicks'),
+    State({'type': 'package-lock', 'recipe_id': MATCH, 'row_id': MATCH}, 'color'),
+    prevent_initial_call=True
+)
+def toggle_package_lock(n_clicks, current_color):
+    if not n_clicks:
+        return dash.no_update
+
+    if current_color == "secondary":
+        return "primary", False
+    return "secondary", True
+
+
+# =============================================================================
+# Global Optimization
+# =============================================================================
+
+
 if __name__ == '__main__':
     app.run(debug=True)

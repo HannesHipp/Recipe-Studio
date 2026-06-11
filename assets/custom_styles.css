@@ -1,0 +1,118 @@
+/* Fix for joining dcc.Dropdown with dbc.Button */
+.joined-dropdown .Select-control {
+    border-top-right-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+    border-right: 0 !important;
+}
+
+.joined-dropdown-btn {
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+}
+
+/* Match Input height to Dropdown height */
+.height-match-dropdown {
+    height: 38px !important;
+    /* Standard React-Select height */
+}
+
+/* Square Buttons inside InputGroups */
+.square-btn {
+    width: 38px !important;
+    /* Match height for square aspect ratio */
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Middle button in joined group (Pkg button) */
+.joined-middle-btn {
+    border-radius: 0 !important;
+    border-right: 0 !important;
+    border-right: 0 !important;
+}
+
+/* Update delete btn to be joined at the end */
+.joined-end-btn {
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+}
+
+/* Hover effect for delete button */
+.delete-btn-hover:hover {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: white !important;
+}
+
+/* Slider Styling for Carbs (Violet) */
+.slider-carbs .rc-slider {
+    padding: 0 !important;
+    height: 14px !important;
+}
+
+.slider-carbs .rc-slider-rail,
+.slider-carbs .rc-slider-track {
+    height: 8px !important;
+    top: 3px !important;
+}
+
+.slider-carbs .rc-slider-handle {
+    width: 14px !important;
+    height: 14px !important;
+    margin-top: 0 !important;
+    top: 0 !important;
+}
+
+.slider-carbs .rc-slider-track {
+    background-color: #AB63FA !important;
+}
+
+.slider-carbs .rc-slider-handle {
+    border: 2px solid #AB63FA !important;
+    background-color: white !important;
+    opacity: 1 !important;
+}
+
+.slider-carbs .rc-slider-handle:hover,
+.slider-carbs .rc-slider-handle:active {
+    border-color: #AB63FA !important;
+    box-shadow: 0 0 5px #AB63FA !important;
+}
+
+/* Slider Styling for Fat (Orange) */
+.slider-fat .rc-slider {
+    padding: 0 !important;
+    height: 14px !important;
+}
+
+.slider-fat .rc-slider-rail,
+.slider-fat .rc-slider-track {
+    height: 8px !important;
+    top: 3px !important;
+}
+
+.slider-fat .rc-slider-handle {
+    width: 14px !important;
+    height: 14px !important;
+    margin-top: 0 !important;
+    top: 0 !important;
+}
+
+.slider-fat .rc-slider-track {
+    background-color: #FFA15A !important;
+}
+
+.slider-fat .rc-slider-handle {
+    border: 2px solid #FFA15A !important;
+    background-color: white !important;
+    opacity: 1 !important;
+}
+
+.slider-fat .rc-slider-handle:hover,
+.slider-fat .rc-slider-handle:active {
+    border-color: #FFA15A !important;
+    box-shadow: 0 0 5px #FFA15A !important;
+}

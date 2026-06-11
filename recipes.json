@@ -1,0 +1,97 @@
+﻿{
+    "4238b03f": {
+        "name": "bli",
+        "ingredients": [
+            {
+                "name": "",
+                "amount": 0,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            },
+            {
+                "name": "",
+                "amount": 0,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            },
+            {
+                "name": "",
+                "amount": 0,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            },
+            {
+                "name": "",
+                "amount": 0,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            }
+        ],
+        "portions": 1
+    },
+    "c7953f41": {
+        "name": "beti",
+        "ingredients": [
+            {
+                "name": "butter",
+                "amount": 50,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            },
+            {
+                "name": "basmati-reis",
+                "amount": 120,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            },
+            {
+                "name": "hanfsamen",
+                "amount": 4,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            },
+            {
+                "name": "datteln",
+                "amount": 30,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            }
+        ],
+        "portions": 1
+    },
+    "24b1a75c": {
+        "name": "ulfi",
+        "ingredients": [
+            {
+                "name": "apfel",
+                "amount": 100,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            },
+            {
+                "name": "beerenmix mit kirsche",
+                "amount": 100,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            },
+            {
+                "name": "erdnussbutter",
+                "amount": 40,
+                "priority": 1,
+                "locked": false,
+                "pkg_locked": false
+            }
+        ],
+        "portions": 1
+    }
+}
